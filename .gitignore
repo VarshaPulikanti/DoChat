@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.local
+*.env
+
+# Keep example env files
+!.env.example
+
+# Uploads & local vector data
+backend/uploads/
+chroma_data/
+
+# Build output
+frontend/dist/
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db

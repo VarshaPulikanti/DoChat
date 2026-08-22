@@ -1,0 +1,36 @@
+This is a sample document for testing the DocChat RAG application.
+
+## About DocChat
+
+DocChat is a retrieval-augmented generation (RAG) application built with the MERN stack. It allows users to upload documents and ask questions about their content.
+
+## Key Features
+
+- Document upload support for PDF, TXT, and Markdown files
+- Automatic text chunking and embedding generation
+- Semantic search using cosine similarity
+- AI-powered answers grounded in document content
+- Source citations showing which passages were used
+
+## Technology Stack
+
+The frontend is built with React and Vite. The backend uses Node.js and Express. MongoDB stores document metadata and text chunks with their vector embeddings. Embeddings use the free local all-MiniLM-L6-v2 model. Answer generation uses the Gemini API.
+
+## How It Works
+
+When a user uploads a document, the system extracts text, splits it into overlapping chunks, and generates embeddings for each chunk using the local all-MiniLM-L6-v2 model. These embeddings are stored in MongoDB alongside the chunk text.
+
+When a user asks a question, the question is embedded and compared against all stored chunks using cosine similarity. The top matching chunks are sent to Gemini 2.0 Flash as context, and the model generates an answer based only on that context.
+
+## Getting Started
+
+To run the application, you need Node.js and MongoDB. Install dependencies for both backend and frontend, configure your environment variables, and start both servers.
+
+The default backend runs on port 5000 and the frontend on port 3000.
+
+## Limitations
+
+- Maximum file upload size is 10 MB
+- Supported formats are PDF, plain text, and Markdown
+- First run downloads AI models locally (~300 MB), then works offline
+- Vector search is performed in-memory (suitable for moderate document collections)
