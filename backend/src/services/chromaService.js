@@ -91,6 +91,28 @@ export async function searchChunks(userId, question, documentIds = null, topK = 
   }));
 }
 
+export async function getDocumentIntroChunk(userId, documentId) {
+  const collection = await getCollection();
+  const results = await collection.get({
+    where: {
+      $and: [
+        { userId: userId.toString() },
+        { documentId: documentId.toString() },
+        { chunkIndex: 0 },
+      ],
+    },
+    include: ["documents", "metadatas"],
+  });
+
+  if (!results.documents?.length) return null;
+
+  return {
+    text: results.documents[0],
+    documentId: documentId.toString(),
+    score: 0.3,
+  };
+}
+
 export async function countUserChunks(userId) {
   const collection = await getCollection();
   const results = await collection.get({

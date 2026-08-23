@@ -1,11 +1,18 @@
 import Document from "../models/Document.js";
 import ChatHistory from "../models/ChatHistory.js";
 import { getUserDocumentIds } from "./documentService.js";
-import { searchChunks } from "./chromaService.js";
+import { searchChunks, getDocumentIntroChunk } from "./chromaService.js";
 import { generateAnswer, streamAnswer } from "./geminiService.js";
 
 const TOP_K = 5;
-const MIN_SCORE = 0.25;
+const MIN_SCORE = 0.15;
+
+const BROAD_QUESTION =
+  /\b(summarize|summary|explain|overview|what is this (document|file) about|tell me about (this|the) document|describe (this|the) document|what does this document|main topic|what is in this|about this document)\b/i;
+
+function isBroadQuestion(question) {
+  return BROAD_QUESTION.test(question.toLowerCase());
+}
 
 async function retrieveRelevantChunks(question, userId, documentIds = null) {
   const userDocIds = await getUserDocumentIds(userId);
@@ -32,14 +39,23 @@ async function retrieveRelevantChunks(question, userId, documentIds = null) {
 
   let scored;
   try {
-    scored = await searchChunks(userId, question, allowedIds, TOP_K);
+    const topK = isBroadQuestion(question) ? 8 : TOP_K;
+    scored = await searchChunks(userId, question, allowedIds, topK);
+
+    if (isBroadQuestion(question) && allowedIds.length === 1) {
+      const intro = await getDocumentIntroChunk(userId, allowedIds[0]);
+      if (intro && !scored.some((c) => c.text === intro.text)) {
+        scored.unshift(intro);
+      }
+    }
   } catch (err) {
     throw new Error(
       `ChromaDB search failed. Is Chroma running on port 8000? ${err.message}`
     );
   }
 
-  scored = scored.filter((chunk) => chunk.score >= MIN_SCORE);
+  const filtered = scored.filter((chunk) => chunk.score >= MIN_SCORE);
+  scored = filtered.length > 0 ? filtered : scored.slice(0, TOP_K);
 
   if (scored.length === 0) {
     return {

@@ -196,7 +196,7 @@ MongoDB holds metadata and chat history; ChromaDB handles vector search. Deletin
 ## How RAG Works Here
 
 1. **Ingestion** — Documents are chunked (~800 chars, 100 overlap) and embedded with `all-MiniLM-L6-v2`, then stored in **ChromaDB** with metadata (`userId`, `documentId`, `chunkIndex`).
-2. **Retrieval** — The question is embedded and **ChromaDB performs cosine similarity search** (HNSW index), filtered by user and selected document(s). Top 5 chunks returned; chunks below score 0.25 are discarded.
+2. **Retrieval** — The question is embedded and **ChromaDB performs cosine similarity search** (HNSW index), filtered by user and selected document(s). Top 5 chunks returned; chunks below score 0.15 are discarded. Broad questions (e.g. "explain the document") also include the opening chunk and fall back to the best available matches.
 3. **Generation** — Retrieved chunks plus recent chat history (last 6 messages) are passed to `gemini-2.5-flash`, which streams the final answer.
 4. **Persistence** — The full Q&A and source snippets are saved to MongoDB `cathistories` for the active document.
 
