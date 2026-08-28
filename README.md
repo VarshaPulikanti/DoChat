@@ -2,6 +2,9 @@
 
 A full-stack **Retrieval-Augmented Generation (RAG)** application built with the MERN stack. Sign up, upload documents (PDF, TXT, Markdown), then ask questions and get **streaming answers** grounded in your document content.
 
+**Live demo:** [https://do-chat-alpha.vercel.app](https://do-chat-alpha.vercel.app)  
+**GitHub:** [https://github.com/VarshaPulikanti/DoChat](https://github.com/VarshaPulikanti/DoChat)
+
 **Free local embeddings + Gemini for answers.** No paid embedding API needed.
 
 ## Features
@@ -71,6 +74,7 @@ MONGODB_URI=mongodb://localhost:27017/rag-app
 GEMINI_API_KEY=your-gemini-key-here
 JWT_SECRET=change_this_to_a_long_random_secret
 CHROMA_URL=http://localhost:8000
+FRONTEND_URL=http://localhost:3000
 ```
 
 | Variable       | Purpose                                      |
@@ -79,6 +83,7 @@ CHROMA_URL=http://localhost:8000
 | `GEMINI_API_KEY` | Google Gemini API key for answer generation |
 | `JWT_SECRET`   | Secret for signing login tokens (required)   |
 | `CHROMA_URL`   | ChromaDB server URL (default `localhost:8000`) |
+| `FRONTEND_URL` | Allowed CORS origin(s), comma-separated      |
 
 ### 3. Start MongoDB
 
@@ -198,7 +203,7 @@ MongoDB holds metadata and chat history; ChromaDB handles vector search. Deletin
 1. **Ingestion** — Documents are chunked (~800 chars, 100 overlap) and embedded with `all-MiniLM-L6-v2`, then stored in **ChromaDB** with metadata (`userId`, `documentId`, `chunkIndex`).
 2. **Retrieval** — The question is embedded and **ChromaDB performs cosine similarity search** (HNSW index), filtered by user and selected document(s). Top 5 chunks returned; chunks below score 0.15 are discarded. Broad questions (e.g. "explain the document") also include the opening chunk and fall back to the best available matches.
 3. **Generation** — Retrieved chunks plus recent chat history (last 6 messages) are passed to `gemini-2.5-flash`, which streams the final answer.
-4. **Persistence** — The full Q&A and source snippets are saved to MongoDB `cathistories` for the active document.
+4. **Persistence** — The full Q&A and source snippets are saved to MongoDB `chathistories` for the active document.
 
 ## Project Structure
 
@@ -217,13 +222,20 @@ Project1/
 │   ├── uploads/             # uploaded files (gitignored)
 │   └── .env.example
 ├── frontend/
+│   ├── .env.example         # VITE_API_URL for production builds
+│   ├── vercel.json          # Vercel SPA routing
 │   └── src/
 │       ├── apiClient.js     # HTTP client — calls backend (not route definitions)
 │       ├── AuthContext.jsx  # JWT session state
 │       ├── AuthPage.jsx     # login / register UI
 │       ├── Dashboard.jsx    # documents, chat, history UI
 │       └── App.jsx
-├── docker-compose.yml       # ChromaDB only
+├── docker/
+│   ├── chroma.Dockerfile    # ChromaDB for Render
+│   └── backend.Dockerfile   # Backend for Render (repo-root build context)
+├── docker-compose.yml       # ChromaDB only (local)
+├── docker-compose.prod.yml    # Full stack on a VPS
+├── render.yaml              # Render blueprint (Chroma + backend)
 └── README.md
 ```
 
@@ -235,38 +247,67 @@ Project1/
 
 ## Deployment
 
-DocChat needs **4 pieces** in production:
+DocChat is deployed on **Vercel + Render** (free tier).
 
-| Component | Recommended host | Notes |
-|-----------|------------------|-------|
-| Frontend | [Vercel](https://vercel.com) (free) | Static React build |
-| Backend | [Render](https://render.com) Starter ($7/mo) | Needs ~512MB+ RAM for MiniLM embeddings |
-| ChromaDB | Render (Docker) or VPS | Vector search |
-| MongoDB | [MongoDB Atlas](https://mongodb.com/atlas) (free) | Already used locally |
+| Service | URL |
+|---------|-----|
+| **Frontend** | [https://do-chat-alpha.vercel.app](https://do-chat-alpha.vercel.app) |
+| **Backend** | [https://docchat-backend-b2u3.onrender.com](https://docchat-backend-b2u3.onrender.com) |
+| **ChromaDB** | `https://docchat-chroma.onrender.com` |
+| **MongoDB** | MongoDB Atlas (free tier) |
 
-### Option A — Vercel + Render (recommended)
+Health check: [https://docchat-backend-b2u3.onrender.com/api/health](https://docchat-backend-b2u3.onrender.com/api/health)
+
+### Architecture in production
+
+```
+Browser → Vercel (React static)
+              ↓  VITE_API_URL
+         Render backend (Express + MiniLM)
+              ↓                    ↓
+         MongoDB Atlas        Render ChromaDB
+         (metadata, users)    (vectors)
+              ↓
+         Gemini API (answers)
+```
+
+### Deploy your own copy
+
+DocChat needs **4 pieces**:
+
+| Component | Host | Cost |
+|-----------|------|------|
+| Frontend | [Vercel](https://vercel.com) | Free |
+| Backend | [Render](https://render.com) Docker | Free* |
+| ChromaDB | Render Docker | Free |
+| MongoDB | [MongoDB Atlas](https://mongodb.com/atlas) | Free |
+
+\*Free backend works but first upload is slow and large PDFs may hit RAM limits. Use Render **Starter** ($7/mo) if uploads crash.
 
 #### 1. MongoDB Atlas
 
-- Create a free cluster if you do not have one
-- Copy the connection string into `MONGODB_URI`
+- Create a free cluster
+- **Network Access** → allow `0.0.0.0/0` (Render has no fixed IP)
+- Copy connection string → `MONGODB_URI`
 
-#### 2. Deploy ChromaDB on Render
+#### 2. ChromaDB on Render
 
 1. [Render Dashboard](https://dashboard.render.com) → **New** → **Web Service**
-2. Connect repo `VarshaPulikanti/DoChat`
+2. Connect repo [VarshaPulikanti/DoChat](https://github.com/VarshaPulikanti/DoChat)
 3. **Root Directory:** leave blank
 4. **Runtime:** Docker
 5. **Dockerfile Path:** `docker/chroma.Dockerfile`
 6. **Plan:** Free
-7. Deploy → note the URL, e.g. `https://docchat-chroma.onrender.com`
+7. Note URL → `CHROMA_URL` (e.g. `https://docchat-chroma.onrender.com`)
 
-#### 3. Deploy backend on Render
+Verify: `https://YOUR-CHROMA-URL/api/v2/version` returns `"1.0.0"`.
+
+#### 3. Backend on Render
 
 1. **New** → **Web Service** → same repo
 2. **Dockerfile Path:** `docker/backend.Dockerfile`  
-   *(Or set **Root Directory** to `backend` and Dockerfile Path to `Dockerfile`)*
-3. **Plan:** Starter (512MB) — free tier may run out of memory on first upload
+   *(Uses repo-root build context — do **not** use `backend/Dockerfile` unless Root Directory is `backend`.)*
+3. **Plan:** Free (or Starter if uploads crash)
 4. **Environment variables:**
 
 | Variable | Value |
@@ -275,13 +316,13 @@ DocChat needs **4 pieces** in production:
 | `GEMINI_API_KEY` | Your Gemini key |
 | `JWT_SECRET` | Long random string |
 | `CHROMA_URL` | `https://your-chroma-service.onrender.com` |
-| `FRONTEND_URL` | Set after step 4, e.g. `https://your-app.vercel.app` |
+| `FRONTEND_URL` | Set after Vercel deploy, e.g. `https://your-app.vercel.app` |
 
-5. Deploy → note backend URL, e.g. `https://docchat-backend.onrender.com`
+5. Note backend URL → test `/api/health`
 
-Or use the included **`render.yaml`** blueprint (Render → **New Blueprint** → connect repo).
+Or use **`render.yaml`** (Render → **New Blueprint** → connect repo).
 
-#### 4. Deploy frontend on Vercel
+#### 4. Frontend on Vercel
 
 1. [Vercel](https://vercel.com) → **Import** GitHub repo
 2. **Root Directory:** `frontend`
@@ -291,17 +332,28 @@ Or use the included **`render.yaml`** blueprint (Render → **New Blueprint** �
 |----------|-------|
 | `VITE_API_URL` | `https://your-backend.onrender.com/api` |
 
-4. Deploy → copy the Vercel URL
-5. Go back to Render backend → set `FRONTEND_URL` to your Vercel URL → redeploy
+Must include `/api` at the end. Redeploy if you change this value.
 
-#### 5. Verify
+4. Copy Vercel URL → set `FRONTEND_URL` on Render backend → **redeploy backend**
 
-- Open your Vercel URL → register → upload a document → ask a question
-- First upload is slow (MiniLM model download + cold start on Render)
+#### 5. Verify end-to-end
+
+1. Open Vercel URL → **sign up** (new account)
+2. **Upload a document on the live site** (see note below)
+3. Ask: `explain the document`
+4. Answer should stream in the chat panel
+
+### Important: upload documents on production
+
+MongoDB (Atlas) and ChromaDB (Render) are **separate stores**. If you use the same Atlas database locally and in production:
+
+- Document **names** appear in the sidebar (from MongoDB)
+- But **vectors may be missing** in production Chroma (indexed locally only)
+- Chat returns *"I couldn't find relevant information"*
+
+**Fix:** On the live site, delete old documents and **re-upload** files so they are indexed in production ChromaDB.
 
 ### Option B — Single VPS (Docker Compose)
-
-For a DigitalOcean/Railway VPS with Docker:
 
 ```bash
 # backend/.env — fill MONGODB_URI, GEMINI_API_KEY, JWT_SECRET, FRONTEND_URL
@@ -312,10 +364,11 @@ Open **http://your-server-ip:3000** — nginx serves the frontend and proxies `/
 
 ### Production notes
 
-- **Uploads on Render** use ephemeral disk — files may be lost on redeploy. For persistent storage, add S3/Cloudinary later.
-- **Cold starts** on free Render spin down after inactivity; first request can take 30–60s.
-- **CORS:** backend only accepts origins listed in `FRONTEND_URL` (comma-separated for multiple).
-- **Local dev unchanged:** leave `VITE_API_URL` unset; Vite proxy still forwards `/api` → `localhost:5000`.
+- **Uploads on Render** use ephemeral disk — files may be lost on redeploy.
+- **Cold starts** on free Render spin down after ~15 min idle; first request can take 30–60s.
+- **First upload** downloads MiniLM (~25 MB) — allow 2–3 minutes on free tier.
+- **CORS:** backend only accepts origins in `FRONTEND_URL` (comma-separated).
+- **Local dev:** leave `VITE_API_URL` unset; Vite proxy forwards `/api` → `localhost:5000`.
 
 ## License
 
