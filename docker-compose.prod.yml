@@ -1,0 +1,45 @@
+# Full-stack on one VPS (DigitalOcean, Railway, etc.)
+# Usage:
+#   1. Copy backend/.env.example → backend/.env and fill in values
+#   2. Set FRONTEND_URL to your public site URL
+#   3. docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env
+    environment:
+      CHROMA_URL: http://chroma:8000
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      - chroma
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  chroma_data:
+  uploads:

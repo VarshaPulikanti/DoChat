@@ -1,0 +1,35 @@
+# Render Blueprint — deploy backend + ChromaDB
+# Frontend: deploy separately on Vercel (see README Deployment section)
+#
+# After deploy, set on the backend service:
+#   FRONTEND_URL=https://your-app.vercel.app
+
+services:
+  - type: web
+    name: docchat-chroma
+    runtime: docker
+    plan: free
+    dockerfilePath: ./docker/chroma.Dockerfile
+    healthCheckPath: /api/v1/heartbeat
+    envVars:
+      - key: IS_PERSISTENT
+        value: "TRUE"
+
+  - type: web
+    name: docchat-backend
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CHROMA_URL
+        sync: false
+      # Set manually after deploy, e.g. https://docchat-chroma.onrender.com
+      - key: FRONTEND_URL
+        sync: false

@@ -1,0 +1,4 @@
+FROM chromadb/chroma:latest
+
+ENV IS_PERSISTENT=TRUE
+EXPOSE 8000

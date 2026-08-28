@@ -233,6 +233,89 @@ Project1/
 | Backend (dev) | `npm run dev` | Run with `node --watch` (avoid on synced folders) |
 | Frontend | `npm run dev` | Vite dev server on port 3000 |
 
+## Deployment
+
+DocChat needs **4 pieces** in production:
+
+| Component | Recommended host | Notes |
+|-----------|------------------|-------|
+| Frontend | [Vercel](https://vercel.com) (free) | Static React build |
+| Backend | [Render](https://render.com) Starter ($7/mo) | Needs ~512MB+ RAM for MiniLM embeddings |
+| ChromaDB | Render (Docker) or VPS | Vector search |
+| MongoDB | [MongoDB Atlas](https://mongodb.com/atlas) (free) | Already used locally |
+
+### Option A — Vercel + Render (recommended)
+
+#### 1. MongoDB Atlas
+
+- Create a free cluster if you do not have one
+- Copy the connection string into `MONGODB_URI`
+
+#### 2. Deploy ChromaDB on Render
+
+1. [Render Dashboard](https://dashboard.render.com) → **New** → **Web Service**
+2. Connect repo `VarshaPulikanti/DoChat`
+3. **Root Directory:** leave blank
+4. **Runtime:** Docker
+5. **Dockerfile Path:** `docker/chroma.Dockerfile`
+6. **Plan:** Free
+7. Deploy → note the URL, e.g. `https://docchat-chroma.onrender.com`
+
+#### 3. Deploy backend on Render
+
+1. **New** → **Web Service** → same repo
+2. **Dockerfile Path:** `backend/Dockerfile`
+3. **Plan:** Starter (512MB) — free tier may run out of memory on first upload
+4. **Environment variables:**
+
+| Variable | Value |
+|----------|-------|
+| `MONGODB_URI` | Atlas connection string |
+| `GEMINI_API_KEY` | Your Gemini key |
+| `JWT_SECRET` | Long random string |
+| `CHROMA_URL` | `https://your-chroma-service.onrender.com` |
+| `FRONTEND_URL` | Set after step 4, e.g. `https://your-app.vercel.app` |
+
+5. Deploy → note backend URL, e.g. `https://docchat-backend.onrender.com`
+
+Or use the included **`render.yaml`** blueprint (Render → **New Blueprint** → connect repo).
+
+#### 4. Deploy frontend on Vercel
+
+1. [Vercel](https://vercel.com) → **Import** GitHub repo
+2. **Root Directory:** `frontend`
+3. **Environment variable:**
+
+| Variable | Value |
+|----------|-------|
+| `VITE_API_URL` | `https://your-backend.onrender.com/api` |
+
+4. Deploy → copy the Vercel URL
+5. Go back to Render backend → set `FRONTEND_URL` to your Vercel URL → redeploy
+
+#### 5. Verify
+
+- Open your Vercel URL → register → upload a document → ask a question
+- First upload is slow (MiniLM model download + cold start on Render)
+
+### Option B — Single VPS (Docker Compose)
+
+For a DigitalOcean/Railway VPS with Docker:
+
+```bash
+# backend/.env — fill MONGODB_URI, GEMINI_API_KEY, JWT_SECRET, FRONTEND_URL
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Open **http://your-server-ip:3000** — nginx serves the frontend and proxies `/api` to the backend.
+
+### Production notes
+
+- **Uploads on Render** use ephemeral disk — files may be lost on redeploy. For persistent storage, add S3/Cloudinary later.
+- **Cold starts** on free Render spin down after inactivity; first request can take 30–60s.
+- **CORS:** backend only accepts origins listed in `FRONTEND_URL` (comma-separated for multiple).
+- **Local dev unchanged:** leave `VITE_API_URL` unset; Vite proxy still forwards `/api` → `localhost:5000`.
+
 ## License
 
 MIT
