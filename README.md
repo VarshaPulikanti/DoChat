@@ -264,7 +264,8 @@ DocChat needs **4 pieces** in production:
 #### 3. Deploy backend on Render
 
 1. **New** → **Web Service** → same repo
-2. **Dockerfile Path:** `backend/Dockerfile`
+2. **Dockerfile Path:** `docker/backend.Dockerfile`  
+   *(Or set **Root Directory** to `backend` and Dockerfile Path to `Dockerfile`)*
 3. **Plan:** Starter (512MB) — free tier may run out of memory on first upload
 4. **Environment variables:**
 
