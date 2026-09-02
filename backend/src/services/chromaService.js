@@ -58,17 +58,17 @@ export async function deleteDocumentChunks(documentId) {
   });
 }
 
-export async function searchChunks(userId, question, documentIds = null, topK = 5) {
+export async function searchChunks(userId, question, documentId = null, topK = 5) {
   const collection = await getCollection();
   const [queryEmbedding] = await createEmbeddings([question]);
   const userIdStr = userId.toString();
 
   let where = { userId: userIdStr };
-  if (documentIds?.length) {
+  if (documentId) {
     where = {
       $and: [
         { userId: userIdStr },
-        { documentId: { $in: documentIds.map((id) => id.toString()) } },
+        { documentId: documentId.toString() },
       ],
     };
   }

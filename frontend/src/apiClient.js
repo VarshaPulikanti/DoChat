@@ -75,9 +75,9 @@ export async function deleteDocument(id) {
   return request(`/documents/${id}`, { method: "DELETE" });
 }
 
-export async function askQuestion(question, documentIds, history) {
+export async function askQuestion(question, documentId, history) {
   return request("/chat", {
     method: "POST",
-    body: JSON.stringify({ question, documentIds, history }),
+    body: JSON.stringify({ question, documentId, history }),
   });
 }

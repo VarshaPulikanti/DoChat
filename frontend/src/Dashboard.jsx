@@ -148,7 +148,7 @@ export default function Dashboard({ user, onLogout }) {
     const history = messages.slice(-6);
 
     try {
-      const result = await askQuestion(q, [activeDocument._id], history);
+      const result = await askQuestion(q, activeDocument._id, history);
       setMessages((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = {

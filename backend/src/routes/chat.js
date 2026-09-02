@@ -8,14 +8,14 @@ router.use(authMiddleware);
 
 router.post("/chat", async (req, res) => {
   try {
-    const { question, documentIds, history } = req.body;
+    const { question, documentId, history } = req.body;
     if (!question?.trim()) {
       return res.status(400).json({ error: "Question is required" });
     }
     const result = await askQuestion(
       question.trim(),
       req.user.id,
-      documentIds,
+      documentId,
       history
     );
     res.json(result);

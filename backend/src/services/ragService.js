@@ -14,36 +14,40 @@ function isBroadQuestion(question) {
   return BROAD_QUESTION.test(question.toLowerCase());
 }
 
-async function retrieveRelevantChunks(question, userId, documentIds = null) {
+async function retrieveRelevantChunks(question, userId, documentId = null) {
   const userDocIds = await getUserDocumentIds(userId);
   if (userDocIds.length === 0) {
     return {
       earlyAnswer:
         "No documents have been uploaded yet. Please upload a document first.",
       sources: [],
+      documentId: null,
     };
   }
 
-  const allowedIds = documentIds?.length
-    ? documentIds.filter((id) =>
-        userDocIds.some((docId) => docId.toString() === id.toString())
-      )
-    : userDocIds.slice(0, 1);
-
-  if (documentIds?.length && allowedIds.length === 0) {
-    return {
-      earlyAnswer: "No valid documents selected. Please select at least one document.",
-      sources: [],
-    };
+  let activeDocId = documentId;
+  if (activeDocId) {
+    const owned = userDocIds.some(
+      (id) => id.toString() === activeDocId.toString()
+    );
+    if (!owned) {
+      return {
+        earlyAnswer: "No valid document selected. Please select a document.",
+        sources: [],
+        documentId: null,
+      };
+    }
+  } else {
+    activeDocId = userDocIds[0];
   }
 
   let scored;
   try {
     const topK = isBroadQuestion(question) ? 8 : TOP_K;
-    scored = await searchChunks(userId, question, allowedIds, topK);
+    scored = await searchChunks(userId, question, activeDocId, topK);
 
-    if (isBroadQuestion(question) && allowedIds.length === 1) {
-      const intro = await getDocumentIntroChunk(userId, allowedIds[0]);
+    if (isBroadQuestion(question)) {
+      const intro = await getDocumentIntroChunk(userId, activeDocId);
       if (intro && !scored.some((c) => c.text === intro.text)) {
         scored.unshift(intro);
       }
@@ -62,6 +66,7 @@ async function retrieveRelevantChunks(question, userId, documentIds = null) {
       earlyAnswer:
         "I couldn't find relevant information in your documents for that question.",
       sources: [],
+      documentId: activeDocId,
     };
   }
 
@@ -75,7 +80,7 @@ async function retrieveRelevantChunks(question, userId, documentIds = null) {
     score: Math.round(chunk.score * 100) / 100,
   }));
 
-  return { scored, sources };
+  return { scored, sources, documentId: activeDocId };
 }
 
 async function saveChat(userId, documentId, question, answer, sources) {
@@ -83,22 +88,18 @@ async function saveChat(userId, documentId, question, answer, sources) {
   await ChatHistory.create({ userId, documentId, question, answer, sources });
 }
 
-function primaryDocumentId(documentIds) {
-  return documentIds?.[0] || null;
-}
-
 export async function askQuestion(
   question,
   userId,
-  documentIds = null,
+  documentId = null,
   history = []
 ) {
-  const retrieval = await retrieveRelevantChunks(question, userId, documentIds);
+  const retrieval = await retrieveRelevantChunks(question, userId, documentId);
 
   if (retrieval.earlyAnswer) {
     await saveChat(
       userId,
-      primaryDocumentId(documentIds),
+      retrieval.documentId,
       question,
       retrieval.earlyAnswer,
       retrieval.sources
@@ -114,7 +115,7 @@ export async function askQuestion(
 
   await saveChat(
     userId,
-    primaryDocumentId(documentIds),
+    retrieval.documentId,
     question,
     answer,
     retrieval.sources
