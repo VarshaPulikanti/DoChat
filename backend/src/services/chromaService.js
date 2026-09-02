@@ -112,12 +112,3 @@ export async function getDocumentIntroChunk(userId, documentId) {
     score: 0.3,
   };
 }
-
-export async function countUserChunks(userId) {
-  const collection = await getCollection();
-  const results = await collection.get({
-    where: { userId: userId.toString() },
-    include: [],
-  });
-  return results.ids?.length || 0;
-}
