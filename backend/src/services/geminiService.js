@@ -41,16 +41,3 @@ export async function generateAnswer(question, contextChunks, history = []) {
   );
   return result.response.text();
 }
-
-export async function* streamAnswer(question, contextChunks, history = []) {
-  const client = getClient();
-  const model = client.getGenerativeModel({ model: "gemini-2.5-flash" });
-  const result = await model.generateContentStream(
-    buildPrompt(question, contextChunks, history)
-  );
-
-  for await (const chunk of result.stream) {
-    const text = chunk.text();
-    if (text) yield text;
-  }
-}

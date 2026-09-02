@@ -2,7 +2,7 @@ import Document from "../models/Document.js";
 import ChatHistory from "../models/ChatHistory.js";
 import { getUserDocumentIds } from "./documentService.js";
 import { searchChunks, getDocumentIntroChunk } from "./chromaService.js";
-import { generateAnswer, streamAnswer } from "./geminiService.js";
+import { generateAnswer } from "./geminiService.js";
 
 const TOP_K = 5;
 const MIN_SCORE = 0.15;
@@ -87,18 +87,6 @@ function primaryDocumentId(documentIds) {
   return documentIds?.[0] || null;
 }
 
-export async function getUserStats(userId) {
-  const documents = await Document.find({ userId }).select("chunkCount").lean();
-  const chunks = documents.reduce((sum, d) => sum + (d.chunkCount || 0), 0);
-  const questions = await ChatHistory.countDocuments({ userId });
-
-  return {
-    documents: documents.length,
-    chunks,
-    questions,
-  };
-}
-
 export async function askQuestion(
   question,
   userId,
@@ -123,47 +111,6 @@ export async function askQuestion(
     retrieval.scored,
     history.slice(-6)
   );
-
-  await saveChat(
-    userId,
-    primaryDocumentId(documentIds),
-    question,
-    answer,
-    retrieval.sources
-  );
-  return { answer, sources: retrieval.sources };
-}
-
-export async function askQuestionStream(
-  question,
-  userId,
-  documentIds = null,
-  history = [],
-  onChunk
-) {
-  const retrieval = await retrieveRelevantChunks(question, userId, documentIds);
-
-  if (retrieval.earlyAnswer) {
-    onChunk(retrieval.earlyAnswer);
-    await saveChat(
-      userId,
-      primaryDocumentId(documentIds),
-      question,
-      retrieval.earlyAnswer,
-      retrieval.sources
-    );
-    return { answer: retrieval.earlyAnswer, sources: retrieval.sources };
-  }
-
-  let answer = "";
-  for await (const chunk of streamAnswer(
-    question,
-    retrieval.scored,
-    history.slice(-6)
-  )) {
-    answer += chunk;
-    onChunk(chunk);
-  }
 
   await saveChat(
     userId,

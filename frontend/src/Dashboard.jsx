@@ -4,7 +4,7 @@ import {
   fetchChatHistory,
   uploadDocument,
   deleteDocument,
-  askQuestionStream,
+  askQuestion,
 } from "./apiClient";
 import "./App.css";
 
@@ -148,17 +148,14 @@ export default function Dashboard({ user, onLogout }) {
     const history = messages.slice(-6);
 
     try {
-      let streamed = "";
-      await askQuestionStream(q, [activeDocument._id], history, (chunk) => {
-        streamed += chunk;
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: "assistant",
-            content: streamed,
-          };
-          return updated;
-        });
+      const result = await askQuestion(q, [activeDocument._id], history);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          role: "assistant",
+          content: result.answer,
+        };
+        return updated;
       });
 
       const historyData = await fetchChatHistory(activeDocument._id);

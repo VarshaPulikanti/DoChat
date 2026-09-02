@@ -61,10 +61,6 @@ export async function fetchChatHistory(documentId) {
   return request(`/auth/chat-history?documentId=${encodeURIComponent(documentId)}`);
 }
 
-export async function fetchStats() {
-  return request("/stats");
-}
-
 export async function fetchDocuments() {
   return request("/documents");
 }
@@ -79,40 +75,9 @@ export async function deleteDocument(id) {
   return request(`/documents/${id}`, { method: "DELETE" });
 }
 
-export async function askQuestionStream(question, documentIds, history, onChunk) {
-  const token = getToken();
-  const res = await fetch(`${API_BASE}/chat/stream`, {
+export async function askQuestion(question, documentIds, history) {
+  return request("/chat", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
     body: JSON.stringify({ question, documentIds, history }),
   });
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to get answer");
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = JSON.parse(line.slice(6));
-      if (data.error) throw new Error(data.error);
-      if (data.chunk) onChunk(data.chunk);
-      if (data.done) return data;
-    }
-  }
 }
