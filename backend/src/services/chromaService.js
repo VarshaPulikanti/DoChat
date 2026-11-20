@@ -14,21 +14,50 @@ function getClient() {
   return client;
 }
 
-async function getCollection() {
-  if (!collectionPromise) {
-    collectionPromise = getClient()
-      .getOrCreateCollection({
+function isRateLimitError(err) {
+  const message = [
+    err?.message,
+    err?.cause?.message,
+    err?.cause?.cause?.message,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return /\\b429\\b|too many requests/i.test(message);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createCollectionWithRetry() {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getClient().getOrCreateCollection({
         name: COLLECTION_NAME,
         metadata: { "hnsw:space": "cosine" },
-      })
-      .catch((err) => {
-        collectionPromise = undefined;
-        console.error(
-          "ChromaDB collection initialization failed:",
-          err
-        );
-        throw err;
       });
+    } catch (err) {
+      if (!isRateLimitError(err) || attempt === maxAttempts) {
+        throw err;
+      }
+
+      const delayMs = 500 * 2 ** (attempt - 1);
+      console.warn(
+        `ChromaDB rate limited collection initialization (attempt ${attempt}/${maxAttempts}); retrying in ${delayMs}ms.`
+      );
+      await sleep(delayMs);
+    }
+  }
+}
+
+async function getCollection() {
+  if (!collectionPromise) {
+    collectionPromise = createCollectionWithRetry().catch((err) => {
+      collectionPromise = undefined;
+      console.error("ChromaDB collection initialization failed:", err);
+      throw err;
+    });
   }
 
   return collectionPromise;
