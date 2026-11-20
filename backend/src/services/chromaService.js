@@ -16,11 +16,21 @@ function getClient() {
 
 async function getCollection() {
   if (!collectionPromise) {
-    collectionPromise = getClient().getOrCreateCollection({
-      name: COLLECTION_NAME,
-      metadata: { "hnsw:space": "cosine" },
-    });
+    collectionPromise = getClient()
+      .getOrCreateCollection({
+        name: COLLECTION_NAME,
+        metadata: { "hnsw:space": "cosine" },
+      })
+      .catch((err) => {
+        collectionPromise = undefined;
+        console.error(
+          "ChromaDB collection initialization failed:",
+          err
+        );
+        throw err;
+      });
   }
+
   return collectionPromise;
 }
 
