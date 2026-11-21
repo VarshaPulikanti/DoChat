@@ -10,7 +10,12 @@ let collectionId;
 let collectionPromise;
 
 function getBaseUrl() {
-  return (process.env.CHROMA_URL || "http://localhost:8000").replace(/\/+$/, "");
+  // On Render, ChromaDB runs in this same container; avoid the public URL
+  // that was returning Cloudflare 429 challenge pages.
+  const configuredUrl = process.env.RENDER
+    ? "http://127.0.0.1:8000"
+    : process.env.CHROMA_URL || "http://localhost:8000";
+  return configuredUrl.replace(/\/+$/, "");
 }
 
 function getCollectionBasePath() {
