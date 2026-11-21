@@ -3,7 +3,7 @@ import { createEmbeddings } from "./embeddingService.js";
 
 const COLLECTION_NAME = "docchat_chunks";
 const MAX_CHROMA_ATTEMPTS = 6;
-const RETRY_DELAYS_MS = [2000, 4000, 8000, 12000, 15000];
+const RETRY_DELAYS_MS = [5000, 10000, 15000, 20000, 25000];
 
 let client;
 let collectionPromise;
