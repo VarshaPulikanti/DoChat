@@ -1,39 +1,35 @@
-import { ChromaClient } from "chromadb";
 import { createEmbeddings } from "./embeddingService.js";
 
 const COLLECTION_NAME = "docchat_chunks";
+const TENANT = "default_tenant";
+const DATABASE = "default_database";
 const MAX_CHROMA_ATTEMPTS = 6;
 const RETRY_DELAYS_MS = [5000, 10000, 15000, 20000, 25000];
 
-let client;
+let collectionId;
 let collectionPromise;
 
-function getClient() {
-  if (!client) {
-    const url = process.env.CHROMA_URL || "http://localhost:8000";
-    client = new ChromaClient({ path: url });
-  }
-  return client;
+function getBaseUrl() {
+  return (process.env.CHROMA_URL || "http://localhost:8000").replace(/\/+$/, "");
+}
+
+function getCollectionBasePath() {
+  return `/api/v2/tenants/${encodeURIComponent(TENANT)}/databases/${encodeURIComponent(DATABASE)}/collections`;
 }
 
 function getErrorMessage(err) {
   const messages = [];
   let current = err;
-
-  // Include nested causes because the Chroma client wraps fetch/JSON errors.
   for (let depth = 0; current && depth < 5; depth += 1) {
     if (current.message) messages.push(current.message);
     current = current.cause;
   }
-
   return messages.join(" | ");
 }
 
 function isTransientChromaError(err) {
-  const message = getErrorMessage(err);
-
   return /\b(429|500|502|503|504)\b|too many requests|service unavailable|bad gateway|gateway timeout|<!doctype|<html|unexpected token|not valid json|failed to fetch|fetch failed|econnreset|econnrefused|etimedout|enotfound|socket hang up|networkerror/i.test(
-    message
+    getErrorMessage(err)
   );
 }
 
@@ -47,7 +43,6 @@ async function withChromaRetry(operation, label) {
       if (!isTransientChromaError(err) || attempt === MAX_CHROMA_ATTEMPTS) {
         throw err;
       }
-
       const delayMs = RETRY_DELAYS_MS[attempt - 1];
       console.warn(
         `ChromaDB ${label} temporarily unavailable (attempt ${attempt}/${MAX_CHROMA_ATTEMPTS}); retrying in ${delayMs}ms: ${getErrorMessage(err)}`
@@ -57,33 +52,75 @@ async function withChromaRetry(operation, label) {
   }
 }
 
+async function chromaRequest(path, { method = "GET", body } = {}) {
+  const response = await fetch(`${getBaseUrl()}${path}`, {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(
+      `ChromaDB HTTP ${response.status} ${response.statusText}: ${responseText.slice(0, 500)}`
+    );
+  }
+
+  if (!responseText) return null;
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    throw new Error(`ChromaDB returned non-JSON response: ${responseText.slice(0, 300)}`);
+  }
+}
+
 async function createCollection() {
-  return withChromaRetry(
+  const collection = await withChromaRetry(
     () =>
-      getClient().getOrCreateCollection({
-        name: COLLECTION_NAME,
-        metadata: { "hnsw:space": "cosine" },
+      chromaRequest(getCollectionBasePath(), {
+        method: "POST",
+        body: {
+          name: COLLECTION_NAME,
+          metadata: { "hnsw:space": "cosine" },
+          get_or_create: true,
+        },
       }),
     "collection initialization"
   );
+
+  if (!collection?.id) {
+    throw new Error("ChromaDB collection initialization returned no collection ID.");
+  }
+  collectionId = collection.id;
+  return collectionId;
 }
 
-async function getCollection() {
+async function getCollectionId() {
   if (!collectionPromise) {
     collectionPromise = createCollection().catch((err) => {
-      // Do not cache a rejected promise; a later request must be able to retry.
       collectionPromise = undefined;
+      collectionId = undefined;
       console.error("ChromaDB collection initialization failed:", err);
       throw err;
     });
   }
-
   return collectionPromise;
+}
+
+async function collectionRequest(operation, label) {
+  const id = await getCollectionId();
+  return withChromaRetry(
+    () => operation(`${getCollectionBasePath()}/${encodeURIComponent(id)}`),
+    label
+  );
 }
 
 export async function checkChromaConnection() {
   try {
-    await withChromaRetry(() => getClient().heartbeat(), "health check");
+    await withChromaRetry(
+      () => chromaRequest("/api/v2/heartbeat"),
+      "health check"
+    );
     return true;
   } catch (err) {
     console.warn("ChromaDB health check failed:", getErrorMessage(err));
@@ -92,41 +129,41 @@ export async function checkChromaConnection() {
 }
 
 export async function addDocumentChunks(userId, documentId, texts) {
-  const collection = await getCollection();
   const embeddings = await createEmbeddings(texts);
   const docIdStr = documentId.toString();
   const userIdStr = userId.toString();
 
-  // upsert makes retries safe if Chroma stored the batch but its response was lost.
-  await withChromaRetry(
-    () =>
-      collection.upsert({
-        ids: texts.map((_, i) => `${docIdStr}_${i}`),
-        embeddings,
-        documents: texts,
-        metadatas: texts.map((_, i) => ({
-          userId: userIdStr,
-          documentId: docIdStr,
-          chunkIndex: i,
-        })),
+  await collectionRequest(
+    (path) =>
+      chromaRequest(`${path}/upsert`, {
+        method: "POST",
+        body: {
+          ids: texts.map((_, i) => `${docIdStr}_${i}`),
+          embeddings,
+          documents: texts,
+          metadatas: texts.map((_, i) => ({
+            userId: userIdStr,
+            documentId: docIdStr,
+            chunkIndex: i,
+          })),
+        },
       }),
     "document upload"
   );
 }
 
 export async function deleteDocumentChunks(documentId) {
-  const collection = await getCollection();
-  await withChromaRetry(
-    () =>
-      collection.delete({
-        where: { documentId: documentId.toString() },
+  await collectionRequest(
+    (path) =>
+      chromaRequest(`${path}/delete`, {
+        method: "POST",
+        body: { where: { documentId: documentId.toString() } },
       }),
     "document deletion"
   );
 }
 
 export async function searchChunks(userId, question, documentId = null, topK = 5) {
-  const collection = await getCollection();
   const [queryEmbedding] = await createEmbeddings([question]);
   const userIdStr = userId.toString();
 
@@ -140,21 +177,21 @@ export async function searchChunks(userId, question, documentId = null, topK = 5
     };
   }
 
-  const results = await withChromaRetry(
-    () =>
-      collection.query({
-        queryEmbeddings: [queryEmbedding],
-        nResults: topK,
-        where,
-        include: ["documents", "metadatas", "distances"],
+  const results = await collectionRequest(
+    (path) =>
+      chromaRequest(`${path}/query`, {
+        method: "POST",
+        body: {
+          query_embeddings: [queryEmbedding],
+          n_results: topK,
+          where,
+          include: ["documents", "metadatas", "distances"],
+        },
       }),
     "document search"
   );
 
-  if (!results.documents?.[0]?.length) {
-    return [];
-  }
-
+  if (!results.documents?.[0]?.length) return [];
   return results.documents[0].map((text, i) => ({
     text,
     documentId: results.metadatas[0][i].documentId,
@@ -163,24 +200,25 @@ export async function searchChunks(userId, question, documentId = null, topK = 5
 }
 
 export async function getDocumentIntroChunk(userId, documentId) {
-  const collection = await getCollection();
-  const results = await withChromaRetry(
-    () =>
-      collection.get({
-        where: {
-          $and: [
-            { userId: userId.toString() },
-            { documentId: documentId.toString() },
-            { chunkIndex: 0 },
-          ],
+  const results = await collectionRequest(
+    (path) =>
+      chromaRequest(`${path}/get`, {
+        method: "POST",
+        body: {
+          where: {
+            $and: [
+              { userId: userId.toString() },
+              { documentId: documentId.toString() },
+              { chunkIndex: 0 },
+            ],
+          },
+          include: ["documents", "metadatas"],
         },
-        include: ["documents", "metadatas"],
       }),
     "document lookup"
   );
 
   if (!results.documents?.length) return null;
-
   return {
     text: results.documents[0],
     documentId: documentId.toString(),
