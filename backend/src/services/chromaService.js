@@ -2,6 +2,8 @@ import { ChromaClient } from "chromadb";
 import { createEmbeddings } from "./embeddingService.js";
 
 const COLLECTION_NAME = "docchat_chunks";
+const MAX_CHROMA_ATTEMPTS = 6;
+const RETRY_DELAYS_MS = [2000, 4000, 8000, 12000, 15000];
 
 let client;
 let collectionPromise;
@@ -14,46 +16,62 @@ function getClient() {
   return client;
 }
 
-function isRateLimitError(err) {
-  const message = [
-    err?.message,
-    err?.cause?.message,
-    err?.cause?.cause?.message,
-  ]
-    .filter(Boolean)
-    .join(" ");
+function getErrorMessage(err) {
+  const messages = [];
+  let current = err;
 
-  return /\\b429\\b|too many requests/i.test(message);
+  // Include nested causes because the Chroma client wraps fetch/JSON errors.
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    if (current.message) messages.push(current.message);
+    current = current.cause;
+  }
+
+  return messages.join(" | ");
+}
+
+function isTransientChromaError(err) {
+  const message = getErrorMessage(err);
+
+  return /\b(429|500|502|503|504)\b|too many requests|service unavailable|bad gateway|gateway timeout|<!doctype|<html|unexpected token|not valid json|failed to fetch|fetch failed|econnreset|econnrefused|etimedout|enotfound|socket hang up|networkerror/i.test(
+    message
+  );
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function createCollectionWithRetry() {
-  const maxAttempts = 3;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+async function withChromaRetry(operation, label) {
+  for (let attempt = 1; attempt <= MAX_CHROMA_ATTEMPTS; attempt += 1) {
     try {
-      return await getClient().getOrCreateCollection({
-        name: COLLECTION_NAME,
-        metadata: { "hnsw:space": "cosine" },
-      });
+      return await operation();
     } catch (err) {
-      if (!isRateLimitError(err) || attempt === maxAttempts) {
+      if (!isTransientChromaError(err) || attempt === MAX_CHROMA_ATTEMPTS) {
         throw err;
       }
 
-      const delayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = RETRY_DELAYS_MS[attempt - 1];
       console.warn(
-        `ChromaDB rate limited collection initialization (attempt ${attempt}/${maxAttempts}); retrying in ${delayMs}ms.`
+        `ChromaDB ${label} temporarily unavailable (attempt ${attempt}/${MAX_CHROMA_ATTEMPTS}); retrying in ${delayMs}ms: ${getErrorMessage(err)}`
       );
       await sleep(delayMs);
     }
   }
 }
 
+async function createCollection() {
+  return withChromaRetry(
+    () =>
+      getClient().getOrCreateCollection({
+        name: COLLECTION_NAME,
+        metadata: { "hnsw:space": "cosine" },
+      }),
+    "collection initialization"
+  );
+}
+
 async function getCollection() {
   if (!collectionPromise) {
-    collectionPromise = createCollectionWithRetry().catch((err) => {
+    collectionPromise = createCollection().catch((err) => {
+      // Do not cache a rejected promise; a later request must be able to retry.
       collectionPromise = undefined;
       console.error("ChromaDB collection initialization failed:", err);
       throw err;
@@ -65,9 +83,10 @@ async function getCollection() {
 
 export async function checkChromaConnection() {
   try {
-    await getClient().heartbeat();
+    await withChromaRetry(() => getClient().heartbeat(), "health check");
     return true;
-  } catch {
+  } catch (err) {
+    console.warn("ChromaDB health check failed:", getErrorMessage(err));
     return false;
   }
 }
@@ -78,23 +97,32 @@ export async function addDocumentChunks(userId, documentId, texts) {
   const docIdStr = documentId.toString();
   const userIdStr = userId.toString();
 
-  await collection.add({
-    ids: texts.map((_, i) => `${docIdStr}_${i}`),
-    embeddings,
-    documents: texts,
-    metadatas: texts.map((_, i) => ({
-      userId: userIdStr,
-      documentId: docIdStr,
-      chunkIndex: i,
-    })),
-  });
+  // upsert makes retries safe if Chroma stored the batch but its response was lost.
+  await withChromaRetry(
+    () =>
+      collection.upsert({
+        ids: texts.map((_, i) => `${docIdStr}_${i}`),
+        embeddings,
+        documents: texts,
+        metadatas: texts.map((_, i) => ({
+          userId: userIdStr,
+          documentId: docIdStr,
+          chunkIndex: i,
+        })),
+      }),
+    "document upload"
+  );
 }
 
 export async function deleteDocumentChunks(documentId) {
   const collection = await getCollection();
-  await collection.delete({
-    where: { documentId: documentId.toString() },
-  });
+  await withChromaRetry(
+    () =>
+      collection.delete({
+        where: { documentId: documentId.toString() },
+      }),
+    "document deletion"
+  );
 }
 
 export async function searchChunks(userId, question, documentId = null, topK = 5) {
@@ -112,12 +140,16 @@ export async function searchChunks(userId, question, documentId = null, topK = 5
     };
   }
 
-  const results = await collection.query({
-    queryEmbeddings: [queryEmbedding],
-    nResults: topK,
-    where,
-    include: ["documents", "metadatas", "distances"],
-  });
+  const results = await withChromaRetry(
+    () =>
+      collection.query({
+        queryEmbeddings: [queryEmbedding],
+        nResults: topK,
+        where,
+        include: ["documents", "metadatas", "distances"],
+      }),
+    "document search"
+  );
 
   if (!results.documents?.[0]?.length) {
     return [];
@@ -132,16 +164,20 @@ export async function searchChunks(userId, question, documentId = null, topK = 5
 
 export async function getDocumentIntroChunk(userId, documentId) {
   const collection = await getCollection();
-  const results = await collection.get({
-    where: {
-      $and: [
-        { userId: userId.toString() },
-        { documentId: documentId.toString() },
-        { chunkIndex: 0 },
-      ],
-    },
-    include: ["documents", "metadatas"],
-  });
+  const results = await withChromaRetry(
+    () =>
+      collection.get({
+        where: {
+          $and: [
+            { userId: userId.toString() },
+            { documentId: documentId.toString() },
+            { chunkIndex: 0 },
+          ],
+        },
+        include: ["documents", "metadatas"],
+      }),
+    "document lookup"
+  );
 
   if (!results.documents?.length) return null;
 
